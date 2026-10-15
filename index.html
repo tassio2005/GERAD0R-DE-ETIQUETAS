@@ -899,18 +899,19 @@ const DRIVE_CLIENT_ID = '547841533886-g4ng5mr6fpgo3c1a4p8n0eldqnk9imfi.apps.goog
   function el(id) { return document.getElementById(id); }
   function mostrar(id, v) { var e = el(id); if (e) e.style.display = v ? '' : 'none'; }
   function atualizarBotoes() { var a = ativo(); mostrar('driveBtnConectar', !a); mostrar('driveBtnSync', a); mostrar('driveBtnDesconectar', a); }
+  function rotuloSync(expirado) { var b = el('driveBtnSync'); if (b) b.textContent = expirado ? '🔌 Reconectar e sincronizar' : '🔄 Sincronizar agora'; }
   function setStatus(txt, cor) { var e = el('driveStatus'); if (e) { e.textContent = txt; e.style.color = cor || 'var(--muted)'; } atualizarBotoes(); }
 
   // ── Login Google (Google Identity Services) ──
   var token = null, tokExp = 0, tokenClient = null, espera = null;
   function lerTokenSessao() {
     try {
-      var t = JSON.parse(sessionStorage.getItem(K_TOK) || 'null');
+      var t = JSON.parse(rawGet.call(ls, K_TOK) || 'null');
       if (t && t.exp > Date.now() + 60000) { token = t.v; tokExp = t.exp; }
     } catch (e) {}
   }
   function tokenValido() { return !!token && tokExp > Date.now() + 60000; }
-  function limparToken() { token = null; tokExp = 0; try { sessionStorage.removeItem(K_TOK); } catch (e) {} }
+  function limparToken() { token = null; tokExp = 0; try { rawRem.call(ls, K_TOK); } catch (e) {} }
   function pedirToken() {
     return new Promise(function (res, rej) {
       if (tokenValido()) return res(token);
@@ -926,7 +927,7 @@ const DRIVE_CLIENT_ID = '547841533886-g4ng5mr6fpgo3c1a4p8n0eldqnk9imfi.apps.goog
             if (r.error) return e.rej(new Error(r.error_description || r.error));
             token = r.access_token;
             tokExp = Date.now() + (parseInt(r.expires_in, 10) || 3600) * 1000;
-            try { sessionStorage.setItem(K_TOK, JSON.stringify({ v: token, exp: tokExp })); } catch (x) {}
+            try { rawSet.call(ls, K_TOK, JSON.stringify({ v: token, exp: tokExp })); } catch (x) {}
             e.res(token);
           },
           error_callback: function (err) {
@@ -999,14 +1000,14 @@ const DRIVE_CLIENT_ID = '547841533886-g4ng5mr6fpgo3c1a4p8n0eldqnk9imfi.apps.goog
   // ── Sincronização ──
   // modo: 'conectar' | 'manual' | 'inicio' | 'push'
   // 'push' (automático após editar) só envia; não troca dados da tela no meio do trabalho.
-  var rodando = false, fila = null, aguardandoGesto = false;
+  var rodando = false, fila = null;
   async function sincronizar(modo) {
     if (!ativo()) return;
     if (rodando) { fila = modo; return; }
-    if (!tokenValido() && modo !== 'manual' && modo !== 'conectar') { esperarGesto(); return; }
+    if (!tokenValido() && modo !== 'manual' && modo !== 'conectar') { precisaReconectar(); return; }
     rodando = true; clearTimeout(timer);
     try {
-      setStatus('🔄 Sincronizando...', 'var(--accent)');
+      setStatus('🔄 Sincronizando...', 'var(--accent)'); rotuloSync(false);
       await pedirToken();
       var id = await achar();
       var remoto = { keys: {} };
@@ -1080,7 +1081,7 @@ const DRIVE_CLIENT_ID = '547841533886-g4ng5mr6fpgo3c1a4p8n0eldqnk9imfi.apps.goog
       if (modo === 'conectar') aviso('☁️ Google Drive conectado.', 'ok');
       if (mudou) aposPuxar();
     } catch (e) {
-      if (e && e.message === 'AUTH') { limparToken(); esperarGesto(); }
+      if (e && e.message === 'AUTH') { limparToken(); precisaReconectar(); }
       else {
         if (modo === 'conectar') { try { rawRem.call(ls, K_ATIVO); } catch (x) {} }
         setStatus('⚠️ ' + ((e && e.message) || 'Falha na sincronização'), '#ff7676');
@@ -1104,19 +1105,17 @@ const DRIVE_CLIENT_ID = '547841533886-g4ng5mr6fpgo3c1a4p8n0eldqnk9imfi.apps.goog
     setTimeout(function () { location.reload(); }, 1200);
   }
 
-  // O token dura ~1h; depois disso, o próximo clique/tecla na página reconecta (popup rápido)
-  function esperarGesto() {
-    if (aguardandoGesto) return;
-    aguardandoGesto = true;
-    setStatus('🔌 Reconecte ao Google: clique em qualquer lugar da página', '#ffb74d');
-    var h = function () {
-      document.removeEventListener('pointerdown', h, true);
-      document.removeEventListener('keydown', h, true);
-      aguardandoGesto = false;
-      sincronizar('manual');
-    };
-    document.addEventListener('pointerdown', h, true);
-    document.addEventListener('keydown', h, true);
+  // O login do Google (token) dura ~1h e fica lembrado mesmo fechando o site.
+  // Quando expira NÃO abrimos popup sozinho: as alterações continuam salvas neste computador
+  // e o login só abre quando você clica em "Reconectar e sincronizar".
+  var avisouReconectar = false;
+  function precisaReconectar() {
+    setStatus('🔌 Sessão expirada. Clique em "Reconectar e sincronizar".', '#ffb74d');
+    rotuloSync(true);
+    if (!avisouReconectar) {
+      avisouReconectar = true;
+      aviso('☁️ Sessão do Google expirou. Quando quiser enviar/receber dados, abra ⚙️ e clique em "Reconectar e sincronizar".', 'ok');
+    }
   }
 
   // ── Funções chamadas pelos botões ──
@@ -1140,7 +1139,7 @@ const DRIVE_CLIENT_ID = '547841533886-g4ng5mr6fpgo3c1a4p8n0eldqnk9imfi.apps.goog
     atualizarBotoes();
     if (!ativo()) { setStatus('Desconectado — configurações e notas ficam só neste navegador.'); return; }
     lerTokenSessao();
-    if (tokenValido()) sincronizar('inicio'); else esperarGesto();
+    if (tokenValido()) sincronizar('inicio'); else precisaReconectar();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', iniciar); else iniciar();
 
