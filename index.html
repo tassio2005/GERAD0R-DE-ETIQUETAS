@@ -2336,7 +2336,12 @@ function extrairNota(items){
 
   const idxNomeLabel = linhas.findIndex(l=>/NOME.RAZ.O SOCIAL/i.test(l.text)||/NOME\/RAZ/i.test(l.text));
   const idxEndLabel  = linhas.findIndex(l=>/^ENDERE[ÇC]O\b/i.test(l.text.trim())||l.text.trim().startsWith('ENDEREÇO'));
-  const idxMunLabel  = linhas.findIndex(l=>/^MUNIC[IÍ]PIO\b/i.test(l.text.trim())||l.text.trim().startsWith('MUNICÍPIO'));
+  // Label real do município = linha "MUNICÍPIO TELEFONE UF INSCRIÇÃO ESTADUAL". Não basta começar com
+  // "MUNICÍPIO": o NOME do destinatário pode começar assim (ex: "MUNICIPIO DE ELIAS FAUSTO") e a
+  // linha seguinte a ele é o CNPJ. Por isso exigimos também UF + TELEFONE/INSCRIÇÃO na mesma linha.
+  const _ehLabelMun = l => { const t=l.text.trim(); return /^MUNIC[IÍ]PIO\b/i.test(t) && /\bUF\b/.test(t) && /(TELEFONE|FONE|INSCRI)/i.test(t); };
+  let idxMunLabel = linhas.findIndex(_ehLabelMun);
+  if(idxMunLabel===-1) idxMunLabel = linhas.findIndex(l=>/^MUNIC[IÍ]PIO\b/i.test(l.text.trim())||l.text.trim().startsWith('MUNICÍPIO'));
 
   // NOME: linha seguinte ao label NOME/RAZÃO SOCIAL
   if(idxNomeLabel!==-1 && idxNomeLabel+1<linhas.length){
