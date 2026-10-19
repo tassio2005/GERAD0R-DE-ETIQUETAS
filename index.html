@@ -2272,6 +2272,71 @@ function limparNome(nome) {
     .trim();
 }
 
+
+// ── Dados extras do DANFE em PDF (usados para criar linhas na planilha de expedição) ──
+// Data de emissão, CNPJ/CPF do destinatário e valor total de cada item. O que não for achado fica em branco.
+function totalDaLinhaDanfe(linha, qtde) {
+  // linha do item: "COD DESCRIÇÃO NCM CST CFOP UN QTD UNITÁRIO TOTAL ..."
+  const m = String(linha).match(/\b\d{8}\s+\d{2,4}\s+\d{4}\s+[A-Za-z]{1,4}\s+(.*)$/);
+  if (!m) return null;
+  const nums = (m[1].match(/\d{1,3}(?:\.\d{3})*,\d+|\d+/g) || [])
+    .map(x => parseFloat(x.replace(/\./g, '').replace(',', '.'))).filter(n => !isNaN(n));
+  const q = qtde > 0 ? qtde : (nums[0] || 1);
+  // nums[0] é a quantidade; procura o 1º par (unitário, total) coerente com ela
+  for (let i = 1; i + 1 < nums.length; i++) {
+    if (Math.abs(nums[i] * q - nums[i + 1]) <= 0.02 + 0.005 * nums[i + 1]) return Math.round(nums[i + 1] * 100) / 100;
+  }
+  return nums.length >= 3 ? Math.round(nums[2] * 100) / 100 : null;
+}
+
+function extrairExtrasDanfePDF(items, textos, produtos) {
+  const out = { emissao: '', doc: '' };
+  const RE_DATA = /\d{2}\/\d{2}\/\d{4}/;
+  const RE_DOC = /\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}|\d{3}\.?\d{3}\.?\d{3}-?\d{2}/;
+  const X = it => it.transform[4], Y = it => it.transform[5];
+  // itens logo abaixo de um rótulo, na mesma coluna, do mais próximo ao mais distante
+  const abaixo = (lab, filtro, dyMax, dxEsq, dxDir) => items
+    .filter(it => { const dy = Y(lab) - Y(it); return dy > 1 && dy < dyMax && X(it) >= X(lab) - dxEsq && X(it) <= X(lab) + dxDir && filtro(it.str); })
+    .sort((a, b) => (Y(lab) - Y(a)) - (Y(lab) - Y(b)));
+  try {
+    const iDest = textos.findIndex(t => /DESTINAT/i.test(t));
+
+    const labE = items.find(it => /DATA\s+(DA\s+|DE\s+)?EMISS/i.test(it.str));
+    if (labE) {
+      let m = labE.str.match(RE_DATA);
+      if (!m) { const c = abaixo(labE, x => RE_DATA.test(x), 30, 10, 130)[0]; if (c) m = c.str.match(RE_DATA); }
+      if (m) out.emissao = m[0];
+    }
+    if (!out.emissao && iDest >= 0) {
+      for (let i = iDest; i < Math.min(iDest + 12, textos.length); i++) {
+        const m = textos[i].match(RE_DATA); if (m) { out.emissao = m[0]; break; }
+      }
+    }
+
+    const labD = items.find(it => /DESTINAT[ÁA]RIO/i.test(it.str));
+    const labsDoc = items.filter(it => /^CNPJ\s*\/\s*CPF\s*$/i.test(it.str.trim()))
+      .filter(it => !labD || Y(it) < Y(labD)).sort((a, b) => Y(b) - Y(a));
+    if (labsDoc.length) {
+      const c = abaixo(labsDoc[0], x => RE_DOC.test(x), 30, 15, 130)[0];
+      if (c) out.doc = c.str.match(RE_DOC)[0].replace(/\D/g, '');
+    }
+    if (!out.doc && iDest >= 0) {
+      for (let i = iDest; i < Math.min(iDest + 10, textos.length); i++) {
+        const m = textos[i].match(RE_DOC); if (m) { out.doc = m[0].replace(/\D/g, ''); break; }
+      }
+    }
+    if (out.doc.length !== 11 && out.doc.length !== 14) out.doc = '';
+
+    (produtos || []).forEach(p => {
+      const linha = textos.find(t => { const x = t.trim(); return x.startsWith(p.cod + ' ') || x === p.cod; });
+      if (!linha) return;
+      const total = totalDaLinhaDanfe(linha, p.qtde);
+      if (total != null) p.total = total;
+    });
+  } catch (e) { console.warn('Extras do DANFE (emissão/CNPJ/valores) falharam', e); }
+  return out;
+}
+
 function extrairNota(items){
   const linhas=reconstruirLinhas(items);
   const textos=linhas.map(l=>l.text);
@@ -2861,8 +2926,9 @@ function extrairNota(items){
     }
   })();
 
+  const extrasPDF = extrairExtrasDanfePDF(items, textos, produtos);
   console.log('NF', nf, '| serie:', serie, '| transportadora:', transportadora, '| natureza:', natureza, '| produtos:', produtos.map(p=>p.cod+' '+p.desc), '| volumes:', volumes);
-  return{nf,serie,destinatario:dest,volumes,produtos,endereco,bairro,municipio,estado,cep,pedido,pedidoCliente,pesoBruto,transportadora,natureza};
+  return{nf,serie,destinatario:dest,volumes,produtos,endereco,bairro,municipio,estado,cep,pedido,pedidoCliente,pesoBruto,transportadora,natureza,emissao:extrasPDF.emissao,doc:extrasPDF.doc};
 }
 
 function carregarJSON(file) {
@@ -2958,6 +3024,8 @@ function criarNotaDeObjeto(obj) {
     pedidoCliente: obj.pedidoCliente || '',
     transportadora:obj.transportadora|| '',
     natureza:      obj.natureza      || '',
+    emissao:       obj.emissao       || '',
+    doc:           obj.doc           || '',
     _tipoOrigem:   obj._tipoOrigem   || 'json',
     _indicePDF:    obj._indicePDF    ?? null,
     _paginaPDF:    obj._paginaPDF    ?? null,
@@ -3064,7 +3132,7 @@ function processarXMLs(files) {
         }
       }
 
-      if (cod && desc) produtos.push({ cod, desc, qtde });
+      if (cod && desc) produtos.push({ cod, desc, qtde, total: vProd });
       produtosDanfe.push({
         cod, desc, ncm, cfop, unidade, cstICMS,
         qCom, vUnCom, vProd, pICMS, vICMS, vIPI
@@ -3138,9 +3206,11 @@ function processarXMLs(files) {
     if (mPedCli) pedidoCliente = mPedCli[1];
 
     if (!nf || !destinatario) return null;
+    const emissao = (dhEmi && /^\d{4}-\d{2}-\d{2}/.test(dhEmi)) ? dhEmi.slice(8, 10) + '/' + dhEmi.slice(5, 7) + '/' + dhEmi.slice(0, 4) : '';
     return {
       nf, serie, destinatario, volumes, produtos, endereco, bairro, municipio, estado, cep,
       pedido, pedidoCliente, pesoBruto, transportadora, natureza,
+      emissao, doc: destCNPJ || destCPF || '',
       // 🆕 Dados completos para DANFE
       _danfe: {
         chave, protocolo, dhRecbto, dhEmi, dhSaiEnt, modFrete, especieVol, pesoLiq,
@@ -4774,7 +4844,7 @@ ${paginasHTML}
   if(!win){ showMsg('⚠️ Permita pop-ups para abrir o romaneio.','err'); return; }
   win.document.write(htmlFinal);
   win.document.close();
-  try { injetarQRRomaneio(win); } catch(e) { console.warn('QR do romaneio falhou', e); }
+  try { injetarQRRomaneio(win, notasSel); } catch(e) { console.warn('QR do romaneio falhou', e); }
 
   // Script de navegação + seleção + copiar/recortar/colar
   setTimeout(function(){
@@ -7741,9 +7811,43 @@ function configurarQRExpedicao() {
   showMsg('✅ QR de expedição configurado. Ele sai na próxima vez que gerar o romaneio.', 'ok');
 }
 
-function injetarQRRomaneio(win) {
+// Dados da nota no formato que o script da planilha usa para criar a linha quando a NF não existe nela
+function dadosNotaParaPlanilha(n) {
+  const d = n._danfe || {};
+  const digs = v => String(v == null ? '' : v).replace(/\D/g, '');
+  let emissao = n.emissao || '';
+  if (!emissao && d.dhEmi && /^\d{4}-\d{2}-\d{2}/.test(d.dhEmi)) emissao = d.dhEmi.slice(8, 10) + '/' + d.dhEmi.slice(5, 7) + '/' + d.dhEmi.slice(0, 4);
+  const docDig = digs(n.doc) || digs(d.dest && (d.dest.cnpj || d.dest.cpf));
+  const doc = docDig.length === 14 ? formatarCNPJCPF(docDig, '') : (docDig.length === 11 ? formatarCNPJCPF('', docDig) : '');
+  const totais = {};
+  (d.produtos || []).forEach(p => { if (p.cod) totais[p.cod] = p.vProd; });
+  const produtos = (n.produtos || []).map(p => ({
+    desc: String(p.desc || '').trim(),
+    qtde: Number(p.qtde) || 1,
+    total: p.total != null ? Number(p.total) : (totais[p.cod] != null ? Number(totais[p.cod]) : null)
+  }));
+  return {
+    nf: digs(n.nf).replace(/^0+/, ''),
+    serie: digs(n.serie).replace(/^0+/, ''),
+    emissao, cliente: String(n.destinatario || '').trim(), doc, produtos
+  };
+}
+
+function enviarDadosRomaneioParaPlanilha(cfg, rid, notasSel) {
+  if (!cfg.url || !rid || typeof fetch !== 'function') return;
+  const itens = (notasSel || []).map(dadosNotaParaPlanilha);
+  fetch(cfg.url, {
+    method: 'POST', mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ k: cfg.token, id: rid, itens })
+  }).catch(() => showMsg('⚠️ QR de expedição: não consegui enviar os dados das notas para a planilha (criar linha de NF faltante não vai funcionar neste romaneio).', 'err'));
+}
+
+function injetarQRRomaneio(win, notasSel) {
   const cfg = romQrCfgLoad();
   if (!cfg.url) return false;
+  cfg.rid = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  enviarDadosRomaneioParaPlanilha(cfg, cfg.rid, notasSel);
   const lib = document.getElementById('qrlib-src');
   if (!lib) return false;
   const s1 = win.document.createElement('script');
@@ -7809,6 +7913,7 @@ function _romQrInit(CFG) {
 
     var base = CFG.url + (CFG.url.indexOf('?') >= 0 ? '&' : '?') +
       (CFG.token ? 'k=' + encodeURIComponent(CFG.token) + '&' : '') +
+      (CFG.rid ? 'r=' + encodeURIComponent(CFG.rid) + '&' : '') +
       't=' + encodeURIComponent(transp) + '&d=' + encodeURIComponent(dsol) + '&nf=';
     var partes = dividir(base.length, nfs);
     var html = '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">';
