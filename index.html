@@ -2291,39 +2291,50 @@ function totalDaLinhaDanfe(linha, qtde) {
 
 function extrairExtrasDanfePDF(items, textos, produtos) {
   const out = { emissao: '', doc: '' };
-  const RE_DATA = /\d{2}\/\d{2}\/\d{4}/;
-  const RE_DOC = /\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}|\d{3}\.?\d{3}\.?\d{3}-?\d{2}/;
   const X = it => it.transform[4], Y = it => it.transform[5];
-  // itens logo abaixo de um rótulo, na mesma coluna, do mais próximo ao mais distante
-  const abaixo = (lab, filtro, dyMax, dxEsq, dxDir) => items
-    .filter(it => { const dy = Y(lab) - Y(it); return dy > 1 && dy < dyMax && X(it) >= X(lab) - dxEsq && X(it) <= X(lab) + dxDir && filtro(it.str); })
-    .sort((a, b) => (Y(lab) - Y(a)) - (Y(lab) - Y(b)));
+  const RE_DATA = /\b\d{2}\/\d{2}\/\d{4}\b/;
+  // CNPJ/CPF dentro de um texto (formatado ou só dígitos); devolve só os dígitos
+  const docDe = s => {
+    const t = String(s || '').trim();
+    let m = t.match(/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/) || t.match(/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/);
+    if (m) return m[0].replace(/\D/g, '');
+    m = t.match(/^(\d{14}|\d{11})$/);
+    return m ? m[1] : '';
+  };
   try {
-    const iDest = textos.findIndex(t => /DESTINAT/i.test(t));
+    // Âncora: o título do bloco do destinatário (o mais alto da página, como no resto do sistema).
+    // Só se olha a janela logo abaixo dele: assim não se confunde com o CNPJ do emitente (remetente).
+    const titulo = items.filter(it => /DESTINAT[ÁA]RIO\s*\/\s*REMETENTE/i.test(it.str)).sort((a, b) => Y(b) - Y(a))[0];
+    if (titulo) {
+      const emitentes = {};
+      items.forEach(it => { if (Y(it) > Y(titulo)) { const d = docDe(it.str); if (d) emitentes[d] = true; } });
+      const dy = it => Y(titulo) - Y(it);
+      const janela = items.filter(it => it.str.trim() && dy(it) > 2 && dy(it) <= 45);
+      const perto = (a, b) => Math.abs(dy(a) - 17) - Math.abs(dy(b) - 17); // a linha dos valores fica ~17 pt abaixo do título (a do nome)
 
-    const labE = items.find(it => /DATA\s+(DA\s+|DE\s+)?EMISS/i.test(it.str));
-    if (labE) {
-      let m = labE.str.match(RE_DATA);
-      if (!m) { const c = abaixo(labE, x => RE_DATA.test(x), 30, 10, 130)[0]; if (c) m = c.str.match(RE_DATA); }
-      if (m) out.emissao = m[0];
-    }
-    if (!out.emissao && iDest >= 0) {
-      for (let i = iDest; i < Math.min(iDest + 12, textos.length); i++) {
-        const m = textos[i].match(RE_DATA); if (m) { out.emissao = m[0]; break; }
+      // CNPJ/CPF: valor logo abaixo do rótulo "CNPJ / CPF"; senão o mais próximo da linha dos valores
+      const candDocs = janela.filter(it => { const d = docDe(it.str); return d && !emitentes[d]; });
+      const labDoc = janela.filter(it => /^CNPJ\s*\/\s*CPF\s*$/i.test(it.str.trim())).sort((a, b) => dy(a) - dy(b))[0];
+      let escolhido = null;
+      if (labDoc) {
+        escolhido = candDocs.filter(it => Y(it) < Y(labDoc) && X(it) >= X(labDoc) - 15 && X(it) <= X(labDoc) + 130)
+          .sort((a, b) => (Y(labDoc) - Y(a)) - (Y(labDoc) - Y(b)))[0] || null;
       }
-    }
+      if (!escolhido) escolhido = candDocs.sort(perto)[0] || null;
+      if (escolhido) out.doc = docDe(escolhido.str);
 
-    const labD = items.find(it => /DESTINAT[ÁA]RIO/i.test(it.str));
-    const labsDoc = items.filter(it => /^CNPJ\s*\/\s*CPF\s*$/i.test(it.str.trim()))
-      .filter(it => !labD || Y(it) < Y(labD)).sort((a, b) => Y(b) - Y(a));
-    if (labsDoc.length) {
-      const c = abaixo(labsDoc[0], x => RE_DOC.test(x), 30, 15, 130)[0];
-      if (c) out.doc = c.str.match(RE_DOC)[0].replace(/\D/g, '');
-    }
-    if (!out.doc && iDest >= 0) {
-      for (let i = iDest; i < Math.min(iDest + 10, textos.length); i++) {
-        const m = textos[i].match(RE_DOC); if (m) { out.doc = m[0].replace(/\D/g, ''); break; }
+      // Data de emissão: valor logo abaixo do rótulo "DATA DA EMISSÃO"; senão a data mais próxima da linha dos valores
+      const candDatas = janela.filter(it => RE_DATA.test(it.str));
+      const labEm = janela.find(it => /DATA\s+(DA\s+|DE\s+)?EMISS/i.test(it.str));
+      let dataItem = null;
+      if (labEm) {
+        const junto = labEm.str.match(RE_DATA);
+        if (junto) out.emissao = junto[0];
+        else dataItem = candDatas.filter(it => Y(it) < Y(labEm) && X(it) >= X(labEm) - 10 && X(it) <= X(labEm) + 130)
+          .sort((a, b) => (Y(labEm) - Y(a)) - (Y(labEm) - Y(b)))[0] || null;
       }
+      if (!out.emissao && !dataItem) dataItem = candDatas.sort(perto)[0] || null;
+      if (!out.emissao && dataItem) out.emissao = dataItem.str.match(RE_DATA)[0];
     }
     if (out.doc.length !== 11 && out.doc.length !== 14) out.doc = '';
 
