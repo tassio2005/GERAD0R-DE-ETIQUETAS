@@ -2349,6 +2349,82 @@ function extrairExtrasDanfePDF(items, textos, produtos) {
   return out;
 }
 
+
+// ── Itens da nota para a planilha: lidos pela tabela fiscal (NCM, CST, CFOP, UN, quantidade, unitário, total) ──
+// Todo item do DANFE tem essas colunas, então não depende do formato do código do produto.
+// Devolve [{cod, desc, qtde, total}], um por linha de item da nota (sem juntar códigos repetidos).
+function extrairItensPorNCM(textos) {
+  let ini = -1, fim = textos.length;
+  for (let i = 0; i < textos.length; i++) {
+    if (textos[i].includes('DADOS DO PRODUTO') || textos[i].includes('DADOS DOS PRODUTOS')) ini = i + 1;
+    if (ini > 0 && (textos[i].includes('DADOS ADICIONAIS') || textos[i].includes('RESERVADO AO FISCO') || textos[i].includes('INFORMAÇÕES COMPLEMENTARES'))) { fim = i; break; }
+  }
+  if (ini === -1) return [];
+  const bloco = textos.slice(ini, fim).map(t => String(t).trim());
+  const RE = /^(.*?)\s*\b(\d{8})\s+(\d{2,4})\s+(\d{4})\s+([A-Za-z]{1,4})\s+(.+)$/;
+  const limpa = d => limparSufixoUnidade(String(d || '').replace(/\s+LT:.*$/i, '').trim());
+  const itens = [];
+  for (let i = 0; i < bloco.length; i++) {
+    const m = bloco[i].match(RE);
+    if (!m) continue;
+    const nums = (m[6].match(/\d{1,3}(?:\.\d{3})*,\d+|\d+/g) || [])
+      .map(x => parseFloat(x.replace(/\./g, '').replace(',', '.'))).filter(n => !isNaN(n));
+    // quantidade, unitário e total coerentes (qtd × unitário ≈ total)
+    let qtde = null, total = null;
+    for (let k = 0; k + 2 < nums.length; k++) {
+      if (Math.abs(nums[k] * nums[k + 1] - nums[k + 2]) <= 0.02 + 0.005 * nums[k + 2]) { qtde = nums[k]; total = Math.round(nums[k + 2] * 100) / 100; break; }
+    }
+    if (qtde == null && nums.length >= 3) { qtde = nums[0]; total = Math.round(nums[2] * 100) / 100; }
+    else if (qtde == null && nums.length) { qtde = nums[0]; }
+    // código e descrição (à esquerda do NCM)
+    let cod = '', desc = '';
+    const prefixo = m[1].trim();
+    const mp = prefixo.match(/^(\S+)\s+(.+)$/);
+    if (mp) { cod = mp[1]; desc = mp[2]; } else { cod = prefixo; }
+    if (limpa(desc).length < 3) {
+      desc = '';
+      for (let j = i + 1; j < Math.min(i + 5, bloco.length); j++) {          // descrição nas linhas seguintes
+        const prox = bloco[j];
+        if (!prox) continue;
+        if (RE.test(prox)) break;
+        if (/^[\d\s\.\,\/\-\:]+$/.test(prox)) continue;
+        desc = prox.replace(/\s+\d{8}\s+.*$/, ''); break;
+      }
+      if (limpa(desc).length < 3) {
+        desc = '';
+        for (let j = i - 1; j >= Math.max(0, i - 3); j--) {                  // ou na linha anterior
+          const ant = bloco[j];
+          if (!ant) continue;
+          if (RE.test(ant)) break;
+          if (/^[\d\s\.\,\/\-\:]+$/.test(ant)) continue;
+          desc = ant.replace(/\s+\d{8}\s+.*$/, ''); break;
+        }
+      }
+    }
+    desc = limpa(desc);
+    if (!desc) continue;
+    itens.push({ cod, desc, qtde: qtde || 1, total });
+  }
+  return itens;
+}
+
+// Itens que vão para a planilha. Prefere os lidos pela tabela fiscal do PDF (um por linha da nota);
+// sem eles, usa os produtos da nota. Devolve os próprios objetos, para a tela de conferência poder corrigi-los.
+function itensEfetivosPlanilha(n) {
+  const plan = (n.itensPlan || []).filter(i => i && String(i.desc || '').trim());
+  const prods = n.produtos || [];
+  if (plan.length && plan.length >= prods.length) return { lista: plan, origem: 'tabela fiscal do PDF' };
+  if (plan.length) {
+    prods.forEach((p, k) => {
+      if (p.total == null) {
+        const hit = plan.find(i => i.cod && i.cod === p.cod) || (plan.length === prods.length ? plan[k] : null);
+        if (hit && hit.total != null) p.total = hit.total;
+      }
+    });
+  }
+  return { lista: prods, origem: 'produtos da nota' };
+}
+
 function extrairNota(items){
   const linhas=reconstruirLinhas(items);
   const textos=linhas.map(l=>l.text);
@@ -2939,8 +3015,10 @@ function extrairNota(items){
   })();
 
   const extrasPDF = extrairExtrasDanfePDF(items, textos, produtos);
+  const itensPlan = extrairItensPorNCM(textos);
+  window._debugTextos = textos;
   console.log('NF', nf, '| serie:', serie, '| transportadora:', transportadora, '| natureza:', natureza, '| produtos:', produtos.map(p=>p.cod+' '+p.desc), '| volumes:', volumes);
-  return{nf,serie,destinatario:dest,volumes,produtos,endereco,bairro,municipio,estado,cep,pedido,pedidoCliente,pesoBruto,transportadora,natureza,emissao:extrasPDF.emissao,doc:extrasPDF.doc};
+  return{nf,serie,destinatario:dest,volumes,produtos,endereco,bairro,municipio,estado,cep,pedido,pedidoCliente,pesoBruto,transportadora,natureza,emissao:extrasPDF.emissao,doc:extrasPDF.doc,itensPlan};
 }
 
 function carregarJSON(file) {
@@ -3038,6 +3116,7 @@ function criarNotaDeObjeto(obj) {
     natureza:      obj.natureza      || '',
     emissao:       obj.emissao       || '',
     doc:           obj.doc           || '',
+    itensPlan:     obj.itensPlan     || [],
     _tipoOrigem:   obj._tipoOrigem   || 'json',
     _indicePDF:    obj._indicePDF    ?? null,
     _paginaPDF:    obj._paginaPDF    ?? null,
@@ -7817,6 +7896,12 @@ function atualizarExtrasDaNota(existente, nova, primeiraVez) {
     const e = (existente.produtos || []).find(x => x.cod === p.cod);
     if (e && p.total != null) e.total = p.total;
   });
+  if (nova.itensPlan && nova.itensPlan.length) {
+    if (primeiraVez || !existente.itensPlan || !existente.itensPlan.length) existente.itensPlan = nova.itensPlan.slice();
+    else nova.itensPlan.forEach(i => { const k = JSON.stringify(i); if (!existente.itensPlan.some(e => JSON.stringify(e) === k)) existente.itensPlan.push(i); });
+  } else if (primeiraVez) {
+    existente.itensPlan = [];
+  }
 }
 
 // Texto de diagnóstico da última página de PDF lida: onde estão o título do destinatário e os documentos
@@ -7841,6 +7926,16 @@ function diagnosticoExtrasPDF(items) {
     .forEach(it => out.push('  "' + it.str.trim() + '" x=' + f(X(it)) + ' y=' + f(Y(it)) + dyTxt(it)));
   const r = extrairExtrasDanfePDF(items, [], []);
   out.push('Resultado da leitura: CNPJ/CPF = "' + r.doc + '" | emissão = "' + r.emissao + '"');
+  const tx = window._debugTextos || [];
+  let ini = tx.findIndex(t => t.includes('DADOS DO PRODUTO') || t.includes('DADOS DOS PRODUTOS'));
+  out.push('Bloco de produtos (' + (ini >= 0 ? 'a partir da linha ' + ini : 'NÃO ENCONTRADO') + '):');
+  if (ini >= 0) tx.slice(ini, ini + 25).forEach(t => out.push('  | ' + t));
+  const itens = extrairItensPorNCM(tx);
+  out.push('Itens lidos pela tabela fiscal: ' + itens.length);
+  itens.forEach(i => out.push('  cod=' + i.cod + ' | ' + i.qtde + '× ' + i.desc + ' | total=' + i.total));
+  const pr = extrairProdutos(tx, []);
+  out.push('Produtos lidos pelo método antigo: ' + pr.length);
+  pr.forEach(p => out.push('  cod=' + p.cod + ' | ' + p.qtde + '× ' + p.desc));
   return out.join('\n');
 }
 
@@ -7934,14 +8029,21 @@ function abrirDadosPlanilha() {
 
       const totaisXml = {};
       ((n._danfe && n._danfe.produtos) || []).forEach(p => { if (p.cod) totaisXml[p.cod] = p.vProd; });
-      (n.produtos || []).forEach(p => {
+      const ef = itensEfetivosPlanilha(n);
+      if (!ef.lista.length) {
+        const sem = document.createElement('div'); sem.className = 'dp-av'; sem.textContent = '⚠ nenhum produto lido nesta nota (a planilha ficará sem produto, quantidade e valor)';
+        bloco.appendChild(sem);
+      }
+      ef.lista.forEach(p => {
         const linha = document.createElement('div'); linha.className = 'dp-prod';
-        const d = document.createElement('span'); d.className = 'd'; d.textContent = (p.qtde || 1) + '× ' + (p.desc || '');
+        const inQ = document.createElement('input'); inQ.size = 3; inQ.title = 'quantidade'; inQ.value = String(p.qtde || 1);
+        inQ.onchange = () => { const q = num(inQ.value); p.qtde = q && q > 0 ? q : 1; salvar(); };
+        const d = document.createElement('span'); d.className = 'd'; d.textContent = '× ' + (p.desc || '');
         const inV = document.createElement('input'); inV.size = 10; inV.placeholder = 'valor total';
         const v = p.total != null ? p.total : (totaisXml[p.cod] != null ? Number(totaisXml[p.cod]) : null);
         inV.value = v != null ? String(v).replace('.', ',') : '';
         inV.onchange = () => { p.total = num(inV.value); salvar(); };
-        linha.appendChild(d); linha.appendChild(inV);
+        linha.appendChild(inQ); linha.appendChild(d); linha.appendChild(inV);
         bloco.appendChild(linha);
       });
       body.appendChild(bloco);
@@ -8016,7 +8118,7 @@ function dadosNotaParaPlanilha(n) {
   const doc = docDig.length === 14 ? formatarCNPJCPF(docDig, '') : (docDig.length === 11 ? formatarCNPJCPF('', docDig) : '');
   const totais = {};
   (d.produtos || []).forEach(p => { if (p.cod) totais[p.cod] = p.vProd; });
-  const produtos = (n.produtos || []).map(p => ({
+  const produtos = itensEfetivosPlanilha(n).lista.map(p => ({
     desc: String(p.desc || '').trim(),
     qtde: Number(p.qtde) || 1,
     total: p.total != null ? Number(p.total) : (totais[p.cod] != null ? Number(totais[p.cod]) : null)
