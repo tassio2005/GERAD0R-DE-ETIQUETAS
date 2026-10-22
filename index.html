@@ -735,6 +735,7 @@ tr.dragging{opacity:.35}
     <div class="ctrl-group-buttons hidden">
       <button class="btn" onclick="gerarRomaneio()" style="color:#c4b5fd;border-color:#8b5cf6" title="Planilha de despacho">📋 Romaneio</button>
       <button class="btn" onclick="configurarQRExpedicao()" style="color:#c4b5fd;border-color:#8b5cf6" title="Configurar o QR code de expedição que sai no romaneio">🔗 QR Expedição</button>
+      <button class="btn" onclick="abrirDadosPlanilha()" style="color:#c4b5fd;border-color:#8b5cf6" title="Conferir e corrigir CNPJ/CPF, emissão e valores lidos de cada nota">📊 Dados p/ planilha</button>
       <button class="btn" onclick="abrirModalWhatsapp()" style="color:#25d366;border-color:#25d366" title="Enviar via WhatsApp">📲 WhatsApp</button>
       <button class="btn" onclick="baixarNotasAtivas()" style="color:#3b82f6;border-color:#3b82f6" title="Download dos PDFs">⬇️ PDFs</button>
     </div>
@@ -3306,6 +3307,7 @@ async function processarPDFs(files) {
   let processados = 0;
   let notasNovas = 0;
   let erros = 0;
+  const nfsDoLote = new Set(); // NFs já vistas neste envio de PDFs
 
   for (const file of files) {
     try {
@@ -3326,12 +3328,15 @@ async function processarPDFs(files) {
         if(notaValida(nota)) {
           // Mesclar produtos se NF já existe
           const existing = notas.find(n => n.nf === nota.nf);
+          const primeiraVez = !nfsDoLote.has(nota.nf);
+          nfsDoLote.add(nota.nf);
           if(existing) {
             for(const prod of nota.produtos) {
               if(!existing.produtos.find(ep => ep.cod === prod.cod)) {
                 existing.produtos.push(prod);
               }
             }
+            atualizarExtrasDaNota(existing, nota, primeiraVez);
           } else {
             nota._indicePDF = indicePDF;
             nota._paginaPDF = p; // Rastrear número da página (PDF.js usa 1-indexed)
@@ -3352,12 +3357,15 @@ async function processarPDFs(files) {
             if(!notaValida(n2)) continue;
             
             const existing2 = notas.find(n => n.nf === n2.nf);
+            const primeiraVez2 = !nfsDoLote.has(n2.nf);
+            nfsDoLote.add(n2.nf);
             if(existing2) {
               for(const prod of n2.produtos) {
                 if(!existing2.produtos.find(ep => ep.cod === prod.cod)) {
                   existing2.produtos.push(prod);
                 }
               }
+              atualizarExtrasDaNota(existing2, n2, primeiraVez2);
             } else {
               n2._indicePDF = indicePDF;
               n2._paginaPDF = p; // Rastrear número da página
@@ -7785,6 +7793,182 @@ function mostrarModalChecagem(problemas, total, prosseguir) {
   });
 }
 
+
+
+// ══════════════════════════════════════════════════════════════
+// ── DADOS DA NOTA PARA A PLANILHA (conferir / corrigir) ───────
+// Mostra o que o sistema leu de cada nota (CNPJ/CPF, emissão, valor dos itens), deixa corrigir à mão
+// e avisa quando o mesmo documento aparece em notas de clientes diferentes (sinal de CNPJ do remetente).
+// ══════════════════════════════════════════════════════════════
+function _dpDigitos(v) { return String(v == null ? '' : v).replace(/\D/g, ''); }
+
+function _dpDocDaNota(n) {
+  const d = n._danfe || {};
+  return _dpDigitos(n.doc) || _dpDigitos(d.dest && (d.dest.cnpj || d.dest.cpf));
+}
+
+// Quando o PDF de uma NF que já estava carregada é enviado de novo, a leitura nova substitui a antiga
+// (a antiga podia estar errada). Páginas seguintes da mesma NF só completam o que estiver vazio.
+function atualizarExtrasDaNota(existente, nova, primeiraVez) {
+  if (!existente || !nova || existente._danfe) return;
+  if (primeiraVez || nova.emissao) existente.emissao = nova.emissao || '';
+  if (primeiraVez || nova.doc) existente.doc = nova.doc || '';
+  (nova.produtos || []).forEach(p => {
+    const e = (existente.produtos || []).find(x => x.cod === p.cod);
+    if (e && p.total != null) e.total = p.total;
+  });
+}
+
+// Texto de diagnóstico da última página de PDF lida: onde estão o título do destinatário e os documentos
+function diagnosticoExtrasPDF(items) {
+  if (!items || !items.length) return 'Nenhum PDF foi lido ainda nesta sessão. Carregue um PDF e abra esta tela de novo.';
+  const X = it => it.transform[4], Y = it => it.transform[5];
+  const f = n => n.toFixed(1);
+  const out = [];
+  const titulos = items.filter(it => /DESTINAT[ÁA]RIO\s*\/\s*REMETENTE/i.test(it.str)).sort((a, b) => Y(b) - Y(a));
+  out.push('Títulos "DESTINATÁRIO/REMETENTE": ' + titulos.length);
+  titulos.forEach(t => out.push('  x=' + f(X(t)) + ' y=' + f(Y(t)) + ' "' + t.str + '"'));
+  const ref = titulos[0];
+  const dyTxt = it => ref ? ' dy=' + f(Y(ref) - Y(it)) : '';
+  out.push('Itens com cara de CNPJ/CPF (dy = distância abaixo do título; negativo = acima, ex.: emitente):');
+  items.filter(it => /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2}|^\s*(\d{11}|\d{14})\s*$/.test(it.str))
+    .forEach(it => out.push('  "' + it.str.trim() + '" x=' + f(X(it)) + ' y=' + f(Y(it)) + dyTxt(it)));
+  out.push('Rótulos com CNPJ/CPF/EMISSÃO:');
+  items.filter(it => /CNPJ|CPF|EMISS/i.test(it.str) && it.str.trim().length < 40)
+    .forEach(it => out.push('  "' + it.str.trim() + '" x=' + f(X(it)) + ' y=' + f(Y(it)) + dyTxt(it)));
+  out.push('Datas:');
+  items.filter(it => /\d{2}\/\d{2}\/\d{4}/.test(it.str))
+    .forEach(it => out.push('  "' + it.str.trim() + '" x=' + f(X(it)) + ' y=' + f(Y(it)) + dyTxt(it)));
+  const r = extrairExtrasDanfePDF(items, [], []);
+  out.push('Resultado da leitura: CNPJ/CPF = "' + r.doc + '" | emissão = "' + r.emissao + '"');
+  return out.join('\n');
+}
+
+function abrirDadosPlanilha() {
+  document.getElementById('modalDadosPlanilha')?.remove();
+  const el = document.createElement('div');
+  el.id = 'modalDadosPlanilha';
+  el.innerHTML = `
+    <style>
+      #modalDadosPlanilha{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px}
+      #modalDadosPlanilha .dp-box{background:var(--panel);border:1px solid var(--border);border-radius:6px;max-width:820px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.8)}
+      #modalDadosPlanilha .dp-head{padding:16px 20px;border-bottom:1px solid var(--border)}
+      #modalDadosPlanilha .dp-head h3{font-family:'Space Mono',monospace;font-size:14px;color:var(--accent);margin-bottom:6px}
+      #modalDadosPlanilha .dp-head p{font-size:12px;color:var(--muted)}
+      #modalDadosPlanilha .dp-body{padding:12px 20px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+      #modalDadosPlanilha .dp-nf{border:1px solid var(--border);border-radius:4px;padding:10px 12px;background:var(--bg)}
+      #modalDadosPlanilha .dp-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;font-size:12px}
+      #modalDadosPlanilha .dp-top b{font-family:'Space Mono',monospace;color:var(--accent)}
+      #modalDadosPlanilha .dp-cli{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:360px}
+      #modalDadosPlanilha .dp-campos{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted)}
+      #modalDadosPlanilha input{background:var(--panel);color:var(--text,#eee);border:1px solid var(--border);border-radius:3px;padding:4px 6px;font-size:12px;font-family:'Space Mono',monospace}
+      #modalDadosPlanilha input.dp-ruim{border-color:var(--accent2)}
+      #modalDadosPlanilha .dp-prod{display:flex;gap:8px;align-items:center;font-size:11px;color:var(--muted);margin-top:4px}
+      #modalDadosPlanilha .dp-prod span.d{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      #modalDadosPlanilha .dp-av{color:#e8b84a;font-size:11px}
+      #modalDadosPlanilha textarea{width:100%;height:220px;background:#111;color:#0f0;font-family:monospace;font-size:11px;padding:8px;border:1px solid #333;display:none}
+      #modalDadosPlanilha .dp-foot{padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
+    </style>
+    <div class="dp-box">
+      <div class="dp-head">
+        <h3>DADOS DA NOTA PARA A PLANILHA</h3>
+        <p>É isto que vai para a planilha quando uma NF for criada ou completada. Dá para corrigir aqui; vale para os próximos romaneios.</p>
+      </div>
+      <div class="dp-body" id="dpBody"></div>
+      <div class="dp-body" style="padding-top:0"><textarea id="dpDiag" readonly></textarea></div>
+      <div class="dp-foot">
+        <button class="btn btn-secondary" id="dpDiagBtn">🔎 Diagnóstico do último PDF</button>
+        <button class="btn btn-secondary" id="dpLimpar">Limpar documentos repetidos</button>
+        <button class="btn btn-print" id="dpFechar">Fechar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(el);
+
+  const body = el.querySelector('#dpBody');
+  const salvar = () => { try { notasArquivoSalvar(); } catch (e) {} };
+  const num = txt => {
+    const t = String(txt).trim();
+    if (!t) return null;
+    const v = t.indexOf(',') >= 0 ? parseFloat(t.replace(/\./g, '').replace(',', '.')) : parseFloat(t);
+    return isNaN(v) ? null : v;
+  };
+  const fmtDoc = d => d.length === 14 ? formatarCNPJCPF(d, '') : (d.length === 11 ? formatarCNPJCPF('', d) : d);
+
+  function desenhar() {
+    body.innerHTML = '';
+    if (!notas.length) { body.textContent = 'Nenhuma nota carregada.'; return; }
+    const porDoc = {};
+    notas.forEach(n => { const d = _dpDocDaNota(n); if (d) (porDoc[d] = porDoc[d] || new Set()).add(n.destinatario); });
+    notas.forEach(n => {
+      const bloco = document.createElement('div'); bloco.className = 'dp-nf';
+      const top = document.createElement('div'); top.className = 'dp-top';
+      const b = document.createElement('b'); b.textContent = 'NF ' + fmtNF(n.nf) + (n.serie ? ' · série ' + n.serie : '');
+      const cli = document.createElement('span'); cli.className = 'dp-cli'; cli.textContent = n.destinatario || '';
+      top.appendChild(b); top.appendChild(cli);
+      const doc = _dpDocDaNota(n);
+      if (doc && porDoc[doc].size >= 2) {
+        const av = document.createElement('span'); av.className = 'dp-av';
+        av.textContent = '⚠ mesmo documento em ' + porDoc[doc].size + ' clientes diferentes (pode ser o do remetente)';
+        top.appendChild(av);
+      }
+      bloco.appendChild(top);
+
+      const campos = document.createElement('div'); campos.className = 'dp-campos';
+      const lblDoc = document.createElement('label'); lblDoc.textContent = 'CNPJ/CPF ';
+      const inDoc = document.createElement('input'); inDoc.size = 20; inDoc.value = doc ? fmtDoc(doc) : '';
+      inDoc.placeholder = '(não lido)';
+      const okDoc = d => d === '' || d.length === 11 || d.length === 14;
+      if (!okDoc(doc)) inDoc.classList.add('dp-ruim');
+      inDoc.onchange = () => { const d = _dpDigitos(inDoc.value); n.doc = d; inDoc.classList.toggle('dp-ruim', !okDoc(d)); salvar(); desenhar(); };
+      lblDoc.appendChild(inDoc);
+      const lblEm = document.createElement('label'); lblEm.textContent = 'Emissão ';
+      const inEm = document.createElement('input'); inEm.size = 10; inEm.placeholder = 'dd/mm/aaaa';
+      let em = n.emissao || '';
+      const dh = n._danfe && n._danfe.dhEmi;
+      if (!em && dh && /^\d{4}-\d{2}-\d{2}/.test(dh)) em = dh.slice(8, 10) + '/' + dh.slice(5, 7) + '/' + dh.slice(0, 4);
+      inEm.value = em;
+      inEm.onchange = () => { n.emissao = inEm.value.trim(); salvar(); };
+      lblEm.appendChild(inEm);
+      campos.appendChild(lblDoc); campos.appendChild(lblEm);
+      bloco.appendChild(campos);
+
+      const totaisXml = {};
+      ((n._danfe && n._danfe.produtos) || []).forEach(p => { if (p.cod) totaisXml[p.cod] = p.vProd; });
+      (n.produtos || []).forEach(p => {
+        const linha = document.createElement('div'); linha.className = 'dp-prod';
+        const d = document.createElement('span'); d.className = 'd'; d.textContent = (p.qtde || 1) + '× ' + (p.desc || '');
+        const inV = document.createElement('input'); inV.size = 10; inV.placeholder = 'valor total';
+        const v = p.total != null ? p.total : (totaisXml[p.cod] != null ? Number(totaisXml[p.cod]) : null);
+        inV.value = v != null ? String(v).replace('.', ',') : '';
+        inV.onchange = () => { p.total = num(inV.value); salvar(); };
+        linha.appendChild(d); linha.appendChild(inV);
+        bloco.appendChild(linha);
+      });
+      body.appendChild(bloco);
+    });
+  }
+  desenhar();
+
+  const fechar = () => { el.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if (e.key === 'Escape') fechar(); };
+  document.addEventListener('keydown', onKey);
+  el.querySelector('#dpFechar').onclick = fechar;
+  el.addEventListener('click', e => { if (e.target === el) fechar(); });
+  el.querySelector('#dpLimpar').onclick = () => {
+    const porDoc = {};
+    notas.forEach(n => { const d = _dpDocDaNota(n); if (d) (porDoc[d] = porDoc[d] || new Set()).add(n.destinatario); });
+    let n2 = 0;
+    notas.forEach(n => { const d = _dpDocDaNota(n); if (d && porDoc[d].size >= 2 && !n._danfe) { n.doc = ''; n2++; } });
+    salvar(); desenhar();
+    showMsg(n2 ? '🧹 ' + n2 + ' documento(s) repetido(s) removido(s). Carregue os PDFs de novo para reler.' : 'Nenhum documento repetido encontrado.', 'ok');
+  };
+  el.querySelector('#dpDiagBtn').onclick = () => {
+    const ta = el.querySelector('#dpDiag');
+    ta.style.display = 'block';
+    ta.value = diagnosticoExtrasPDF(window._debugItems);
+    ta.select();
+  };
+}
 
 // ══════════════════════════════════════════════════════════════
 // ── QR CODE DE EXPEDIÇÃO NO ROMANEIO ──────────────────────────
