@@ -2299,6 +2299,9 @@ function extrairExtrasDanfePDF(items, textos, produtos) {
     const t = String(s || '').trim();
     let m = t.match(/\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b/) || t.match(/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/);
     if (m) return m[0].replace(/\D/g, '');
+    // CPF impresso com a máscara de CNPJ, ex.: 00.586.936/963-  (11 dígitos)
+    m = t.match(/\b\d{2}\.\d{3}\.\d{3}\/\d{3}-(?!\d)/);
+    if (m) return m[0].replace(/\D/g, '');
     m = t.match(/^(\d{14}|\d{11})$/);
     return m ? m[1] : '';
   };
@@ -2349,6 +2352,57 @@ function extrairExtrasDanfePDF(items, textos, produtos) {
   return out;
 }
 
+
+
+
+// ── Itens do DANFE pela POSIÇÃO das colunas (código, descrição, NCM, quantidade, valores) ──
+// No PDF o texto de uma linha da tabela vem misturado (valores, código e descrição em linhas separadas),
+// mas as colunas ficam sempre nas mesmas posições. Cada produto começa no código (coluna CÓDIGO).
+function extrairItensPorGeometria(items) {
+  const X = it => it.transform[4], Y = it => it.transform[5];
+  const txt = it => String(it.str || '').trim();
+  // o cabeçalho da tabela de produtos: "DESCRIÇÃO DOS PRODUTOS E SERVIÇOS" e, na mesma linha, "CÓDIGO"
+  // (existe outro "CÓDIGO" no bloco da transportadora, por isso não basta procurar a palavra)
+  const cabDesc = items.find(it => /DESCRI[ÇC][ÃA]O\s+DOS\s+PRODUTOS/i.test(it.str));
+  if (!cabDesc) return [];
+  const cab = items.find(it => /^C[ÓO]DIGO$/i.test(txt(it)) && Math.abs(Y(it) - Y(cabDesc)) < 4 && X(it) < X(cabDesc));
+  if (!cab) return [];
+  const mesmaLinha = it => Math.abs(Y(it) - Y(cab)) < 4;
+  const ncm = items.find(it => /^NCM/i.test(txt(it)) && mesmaLinha(it));
+  const qtd = items.find(it => /^QTDE\.?$/i.test(txt(it)) && mesmaLinha(it));
+  if (!ncm || !qtd) return [];
+  const xCod = X(cab), xDesc = X(cabDesc), xNcm = X(ncm), xQtd = X(qtd);
+  const rodape = items.filter(it => /DADOS\s+ADICIONAIS/i.test(it.str) && Y(it) < Y(cab)).sort((a, b) => Y(b) - Y(a))[0];
+  const yBase = rodape ? Y(rodape) + 2 : -Infinity;
+  const corpo = items.filter(it => txt(it) && Y(it) < Y(cab) - 6 && Y(it) > yBase);
+
+  const codigos = corpo.filter(it => Math.abs(X(it) - xCod) < 8 && /^[A-Za-z0-9][A-Za-z0-9._\-\/]*$/.test(txt(it)))
+    .sort((a, b) => Y(b) - Y(a));
+  if (!codigos.length) return [];
+  const ehCodigo = new Set(codigos);
+  const linhas = codigos.map(c => ({ cod: txt(c), itens: [] }));
+  corpo.forEach(it => {
+    if (ehCodigo.has(it) || Y(it) > Y(codigos[0]) + 3) return;
+    let idx = 0;
+    codigos.forEach((c, i) => { if (Y(it) <= Y(c) + 3) idx = i; });  // valores ficam até ~3 pt acima do código
+    linhas[idx].itens.push(it);
+  });
+
+  const NUM = /^\d{1,3}(?:\.\d{3})*,\d+$|^\d+$/;
+  const BR = v => parseFloat(String(v).replace(/\./g, '').replace(',', '.'));
+  return linhas.map(l => {
+    // descrição: texto da coluna DESCRIÇÃO, de cima para baixo, sem o lote (a partir de "LT:")
+    const desc = l.itens.filter(it => X(it) >= xDesc - 6 && X(it) < xNcm - 12)
+      .sort((a, b) => (Y(b) - Y(a)) || (X(a) - X(b))).map(txt).join(' ')
+      .replace(/\s+LT\s*:.*$/i, '').replace(/\s+LT\s*$/i, '').replace(/\s+/g, ' ').trim();
+    // valores: da quantidade em diante, da esquerda para a direita:
+    // [QTDE, VLR.UNIT, DESC, TOTAL, BC ICMS, VL ICMS, VL IPI, ALIQ ICMS, ALIQ IPI]
+    const nums = l.itens.filter(it => X(it) >= xQtd - 8 && NUM.test(txt(it))).sort((a, b) => X(a) - X(b)).map(txt);
+    const qtde = nums.length ? BR(nums[0]) : null;
+    const total = nums.length >= 4 ? Math.round(BR(nums[3]) * 100) / 100 : null;
+    return { cod: l.cod, desc: desc, qtde: (qtde > 0 ? qtde : 1), total: (total != null && !isNaN(total)) ? total : null };
+  }).filter(i => i.desc);
+}
 
 // ── Itens da nota para a planilha: lidos pela tabela fiscal (NCM, CST, CFOP, UN, quantidade, unitário, total) ──
 // Todo item do DANFE tem essas colunas, então não depende do formato do código do produto.
@@ -3015,7 +3069,14 @@ function extrairNota(items){
   })();
 
   const extrasPDF = extrairExtrasDanfePDF(items, textos, produtos);
-  const itensPlan = extrairItensPorNCM(textos);
+  let itensPlan = extrairItensPorGeometria(items);
+  if (!itensPlan.length) itensPlan = extrairItensPorNCM(textos);
+  const usados = new Set();
+  produtos.forEach(p => {
+    if (p.total != null) return;
+    const k = itensPlan.findIndex((i, n) => !usados.has(n) && i.cod === p.cod && i.total != null);
+    if (k >= 0) { p.total = itensPlan[k].total; usados.add(k); }
+  });
   window._debugTextos = textos;
   console.log('NF', nf, '| serie:', serie, '| transportadora:', transportadora, '| natureza:', natureza, '| produtos:', produtos.map(p=>p.cod+' '+p.desc), '| volumes:', volumes);
   return{nf,serie,destinatario:dest,volumes,produtos,endereco,bairro,municipio,estado,cep,pedido,pedidoCliente,pesoBruto,transportadora,natureza,emissao:extrasPDF.emissao,doc:extrasPDF.doc,itensPlan};
@@ -7930,8 +7991,11 @@ function diagnosticoExtrasPDF(items) {
   let ini = tx.findIndex(t => t.includes('DADOS DO PRODUTO') || t.includes('DADOS DOS PRODUTOS'));
   out.push('Bloco de produtos (' + (ini >= 0 ? 'a partir da linha ' + ini : 'NÃO ENCONTRADO') + '):');
   if (ini >= 0) tx.slice(ini, ini + 25).forEach(t => out.push('  | ' + t));
+  const geo = extrairItensPorGeometria(items);
+  out.push('Itens lidos pela posição das colunas: ' + geo.length);
+  geo.forEach(i => out.push('  cod=' + i.cod + ' | ' + i.qtde + '× ' + i.desc + ' | total=' + i.total));
   const itens = extrairItensPorNCM(tx);
-  out.push('Itens lidos pela tabela fiscal: ' + itens.length);
+  out.push('Itens lidos pelo texto (NCM): ' + itens.length);
   itens.forEach(i => out.push('  cod=' + i.cod + ' | ' + i.qtde + '× ' + i.desc + ' | total=' + i.total));
   const pr = extrairProdutos(tx, []);
   out.push('Produtos lidos pelo método antigo: ' + pr.length);
