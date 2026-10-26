@@ -715,6 +715,19 @@ tr.dragging{opacity:.35}
       <option value="volume">📦 Volume</option>
       <option value="peso">⚖️ Peso</option>
     </select>
+    <div id="filtroDataWrap" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:4px 8px" title="Filtra pela data que está na nota (não pelo dia em que foi carregada). Só a 1ª data = aquele dia; as duas = período.">
+      <select id="fdTipo" onchange="aplicarFiltroData()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:3px;padding:6px 8px;font-family:'Space Mono',monospace;font-size:11px;cursor:pointer">
+        <option value="emissao">📅 Emissão</option>
+        <option value="saida">🚪 Saída (só XML)</option>
+      </select>
+      <input type="date" id="fdDe" onchange="aplicarFiltroData()" title="Dia (ou início do período)" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:3px;padding:5px 6px;font-family:'Space Mono',monospace;font-size:11px;color-scheme:dark">
+      <span style="font-size:10px;color:var(--muted);font-family:'Space Mono',monospace">até</span>
+      <input type="date" id="fdAte" onchange="aplicarFiltroData()" title="Fim do período (opcional)" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:3px;padding:5px 6px;font-family:'Space Mono',monospace;font-size:11px;color-scheme:dark">
+      <button class="btn btn-secondary" style="padding:6px 8px;font-size:10px" onclick="filtroDataAtalho('hoje')">Hoje</button>
+      <button class="btn btn-secondary" style="padding:6px 8px;font-size:10px" onclick="filtroDataAtalho('ontem')">Ontem</button>
+      <button class="btn btn-ghost" style="padding:6px 8px;font-size:10px" onclick="filtroDataAtalho('limpar')" title="Limpar filtro de data">✕</button>
+      <span id="fdInfo" style="font-size:10px;color:var(--accent);font-family:'Space Mono',monospace"></span>
+    </div>
   </div>
 
   <!-- GERAÇÃO DE ETIQUETAS -->
@@ -3650,13 +3663,50 @@ document.addEventListener('click', function(e){
   if(!document.getElementById('transpDropWrap')?.contains(e.target)) fecharTranspDrop();
 });
 
+// ── FILTRO POR DATA (emissão / saída da própria nota) ──
+// Usa a data que está impressa na nota (PDF/XML), nunca o dia em que foi carregada no sistema.
+function dataNotaISO(n, tipo){
+  const iso = s => (s && /^\d{4}-\d{2}-\d{2}/.test(s)) ? s.slice(0,10) : '';
+  if(tipo === 'saida') return iso(n._danfe && n._danfe.dhSaiEnt);
+  const m = String(n.emissao||'').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if(m) return m[3]+'-'+m[2]+'-'+m[1];
+  return iso(n._danfe && n._danfe.dhEmi);
+}
+function lerFiltroData(){
+  const g = id => document.getElementById(id);
+  let de = g('fdDe') ? g('fdDe').value : '';
+  const ate = g('fdAte') ? g('fdAte').value : '';
+  const tipo = g('fdTipo') ? g('fdTipo').value : 'emissao';
+  return { tipo, de, ate, ativo: !!(de || ate) };
+}
+function passaFiltroData(n, f){
+  if(!f.ativo) return true;
+  const d = dataNotaISO(n, f.tipo);
+  if(!d) return false;
+  if(f.de && !f.ate) return d === f.de;      // só um dia
+  if(f.de && d < f.de) return false;
+  if(f.ate && d > f.ate) return false;
+  return true;
+}
+function aplicarFiltroData(){ renderTabela(); }
+function filtroDataAtalho(qual){
+  const iso = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const d = new Date();
+  if(qual === 'ontem') d.setDate(d.getDate()-1);
+  document.getElementById('fdAte').value = '';
+  document.getElementById('fdDe').value = qual === 'limpar' ? '' : iso(d);
+  renderTabela();
+}
+
 function renderTabela(){
   historicoSalvar();
   notasArquivoSalvar();
   const q=document.getElementById('search').value.toLowerCase();
   const todas = getTranspUnicas();
   const filtrarTransp = transpAtivas.size > 0 && transpAtivas.size < todas.length;
+  const fData = lerFiltroData();
   const filtrados=notas.filter(n=>{
+    if(!passaFiltroData(n, fData)) return false;
     if(q && !n.destinatario.toLowerCase().includes(q) && !n.nf.includes(q) && !n.produtos.some(p=>p.desc.toLowerCase().includes(q)||p.cod.includes(q))) return false;
     if(filtrarTransp){
       const tk = (n.transportadora||'').trim() || '__sem__';
@@ -3714,6 +3764,14 @@ function renderTabela(){
   atualizarEstatisticas();
   atualizarNotasHambBtn();
   renderNotasPanel();
+
+  const fdInfo = document.getElementById('fdInfo');
+  if(fdInfo){
+    if(fData.ativo){
+      const semData = notas.filter(n => !dataNotaISO(n, fData.tipo)).length;
+      fdInfo.textContent = filtrados.length + ' de ' + notas.length + ' nota(s)' + (semData ? ' · ' + semData + ' sem data' : '');
+    } else fdInfo.textContent = '';
+  }
 }
 
 // Permite marcar/desmarcar a nota clicando em qualquer lugar da linha,
@@ -5939,6 +5997,9 @@ async function salvarSessao() {
         pedidoCliente: nota.pedidoCliente || '',
         transportadora: nota.transportadora || '',
         natureza: nota.natureza || '',
+        emissao: nota.emissao || '',
+        doc: nota.doc || '',
+        itensPlan: nota.itensPlan || [],
         _tipoOrigem: nota._indicePDF !== undefined ? 'pdf' : 'xml',
         _indicePDF: nota._indicePDF,
         _paginaPDF: nota._paginaPDF,
@@ -6043,6 +6104,9 @@ function carregarSessao(event) {
           pedidoCliente: notaData.pedidoCliente || '',
           transportadora: notaData.transportadora || '',
           natureza: notaData.natureza || '',
+          emissao: notaData.emissao || '',
+          doc: notaData.doc || '',
+          itensPlan: notaData.itensPlan || [],
           _tipoOrigem: notaData._tipoOrigem || 'xml',
           _indicePDF: novoIndicePDF,
           _paginaPDF: notaData._paginaPDF,
