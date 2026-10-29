@@ -659,6 +659,10 @@ tr.dragging{opacity:.35}
     <span style="font-size:24px">🕐</span>
     Histórico
   </button>
+  <button onclick="abrirNotaManual()" style="flex-shrink:0;width:110px;background:var(--panel);border:1px dashed var(--accent);color:var(--accent);cursor:pointer;font-family:'Space Mono',monospace;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px" title="Cadastrar uma nota manualmente para gerar etiquetas">
+    <span style="font-size:24px">➕</span>
+    Nota manual
+  </button>
 </div>
 
 <div id="painelMKT" style="display:none;margin-bottom:22px;border:1px solid var(--border);background:var(--panel)">
@@ -785,6 +789,52 @@ tr.dragging{opacity:.35}
   </div>
 </div>
 
+<!-- MODAL: NOTA MANUAL -->
+<div id="notaManualModal" onclick="if(event.target===this)fecharNotaManual()" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.75);align-items:center;justify-content:center">
+  <div style="background:var(--panel);border:1px solid var(--accent);width:min(680px,95vw);max-height:90vh;overflow-y:auto;padding:26px;position:relative">
+    <button onclick="fecharNotaManual()" style="position:absolute;top:14px;right:16px;background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">&#10005;</button>
+    <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--accent);letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;border-bottom:1px solid var(--border);padding-bottom:12px">➕ Adicionar nota manual</div>
+    <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--muted);margin-bottom:16px">Preencha os dados da etiqueta. Campos com * são obrigatórios.</div>
+    <style>
+      .nm-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+      .nm-f{display:flex;flex-direction:column;gap:4px}
+      .nm-f label{font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+      .nm-f input,.nm-f select{background:#161714;border:1px solid var(--border);color:var(--text);padding:8px 10px;font-size:13px;font-family:inherit;border-radius:3px;min-width:0}
+      .nm-f input:focus{outline:none;border-color:var(--accent)}
+      .nm-prod{display:grid;grid-template-columns:90px 1fr 60px 28px;gap:6px;margin-bottom:6px}
+      .nm-prod input{background:#161714;border:1px solid var(--border);color:var(--text);padding:7px 8px;font-size:12px;font-family:inherit;border-radius:3px;min-width:0}
+      .nm-prod input:focus{outline:none;border-color:var(--accent)}
+      .nm-prod button{background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;border-radius:3px}
+      .nm-prod button:hover{color:var(--accent2);border-color:var(--accent2)}
+      @media(max-width:560px){.nm-grid{grid-template-columns:repeat(2,1fr)}.nm-grid .nm-f{grid-column:span 2!important}}
+    </style>
+    <div class="nm-grid">
+      <div class="nm-f" style="grid-column:span 2"><label>Nº da nota *</label><input id="nmNF" inputmode="numeric" placeholder="16415"></div>
+      <div class="nm-f" style="grid-column:span 4"><label>Destinatário *</label><input id="nmDest" placeholder="Nome do cliente"></div>
+      <div class="nm-f" style="grid-column:span 4"><label>Endereço</label><input id="nmEnd" placeholder="Rua, número, complemento"></div>
+      <div class="nm-f" style="grid-column:span 2"><label>Bairro</label><input id="nmBairro"></div>
+      <div class="nm-f" style="grid-column:span 3"><label>Município</label><input id="nmMun"></div>
+      <div class="nm-f" style="grid-column:span 1"><label>UF</label><input id="nmUF" maxlength="2" style="text-transform:uppercase"></div>
+      <div class="nm-f" style="grid-column:span 2"><label>CEP</label><input id="nmCEP" inputmode="numeric" placeholder="89000000"></div>
+      <div class="nm-f" style="grid-column:span 3"><label>Transportadora</label><input id="nmTransp"></div>
+      <div class="nm-f" style="grid-column:span 2"><label>Volumes</label><input id="nmVol" type="number" min="1" value="1"></div>
+      <div class="nm-f" style="grid-column:span 2"><label>Peso bruto (kg)</label><input id="nmPeso" inputmode="decimal" placeholder="0,00"></div>
+      <div class="nm-f" style="grid-column:span 2"><label>Nº do pedido</label><input id="nmPedido"></div>
+      <div class="nm-f" style="grid-column:span 3"><label>Natureza da operação</label><input id="nmNat" placeholder="Venda de mercadoria"></div>
+      <div class="nm-f" style="grid-column:span 3"><label>CPF / CNPJ</label><input id="nmDoc"></div>
+    </div>
+    <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;margin:18px 0 6px">Produtos</div>
+    <div id="nmProdutos"></div>
+    <button class="btn btn-secondary" onclick="nmAddProduto()" style="font-size:11px;margin-top:2px">+ Produto</button>
+    <div id="nmErro" style="display:none;margin-top:14px;color:var(--accent2);font-family:'Space Mono',monospace;font-size:11px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;flex-wrap:wrap">
+      <button class="btn btn-secondary" onclick="fecharNotaManual()" style="padding:9px 14px">Cancelar</button>
+      <button class="btn btn-secondary" onclick="salvarNotaManual(true)" style="padding:9px 14px">Adicionar e nova</button>
+      <button class="btn btn-primary" onclick="salvarNotaManual(false)" style="padding:9px 14px">Adicionar nota</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL DE PERSONALIZAÇÃO DE ETIQUETA -->
 
 
@@ -795,7 +845,6 @@ tr.dragging{opacity:.35}
   <table>
     <thead><tr>
       <th class="check-col"></th>
-      <th class="check-col" title="Excluir nota"></th>
       <th>Nº NOTA</th><th>DESTINATÁRIO</th><th>NATUREZA</th><th>TRANSPORTADORA</th><th>PRODUTOS</th><th>VOL.</th><th>PESO</th><th class="check-col" title="Marcar todas / desmarcar todas como PEÇA"><input type="checkbox" id="checkAllPeca" onclick="toggleAllPeca()" title="Marcar/desmarcar todas como PEÇA"><br><span style="font-size:9px">PEÇA</span></th>
     </tr></thead>
     <tbody id="tbody"></tbody>
@@ -3718,7 +3767,6 @@ function renderTabela(){
   document.getElementById('tbody').innerHTML=filtrados.map(n=>`
     <tr class="row-clickable" data-nf="${n.nf}" onclick="handleRowClick(event, '${n.nf}')">
       <td class="check-col"><input type="checkbox" class="row-check" data-nf="${n.nf}" ${notasSelecionadas.has(n.nf) || n._selecionado?'checked':''}></td>
-      <td class="check-col"><button class="row-del-btn" title="Excluir esta nota" onclick="event.stopPropagation();excluirNota('${n.nf}')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px;padding:2px 6px" onmouseover="this.style.color='var(--accent2)'" onmouseout="this.style.color='var(--muted)'">🗑</button></td>
       <td class="mono" style="color:var(--accent);font-weight:700">${fmtNF(n.nf)}${badgeImpressaoHTML(n.nf)}</td>
       <td style="font-weight:500">${n.destinatario}</td>
       <td style="font-size:11px;color:var(--muted)">${n.natureza ? '<span style="background:rgba(212,245,60,.08);color:var(--accent);padding:2px 6px;border-radius:2px;border:1px solid rgba(212,245,60,.2)">' + (n.natureza.length > 35 ? n.natureza.substring(0, 35) + '…' : n.natureza) + '</span>' : '<span style="color:var(--border)">—</span>'}</td>
@@ -3732,13 +3780,12 @@ function renderTabela(){
         <span class="edit-hint" style="font-size:9px">duplo-clique</span>
       </td>
       <td class="mono" style="color:var(--muted);text-align:center;font-size:12px">${n.pesoBruto>0?n.pesoBruto.toFixed(2).replace('.',',')+' kg':'—'}</td>
-      <td class="check-col"><input type="checkbox" class="row-check-peca" data-nf="${n.nf}" ${n._peca?'checked':''} title="Marcar para ir na coluna PEÇA do romaneio" onclick="event.stopPropagation()"></td>
+      <td class="check-col" style="white-space:nowrap;width:auto"><input type="checkbox" class="row-check-peca" data-nf="${n.nf}" ${n._peca?'checked':''} title="Marcar para ir na coluna PEÇA do romaneio" onclick="event.stopPropagation()"><button class="row-del-btn" title="Excluir esta nota" onclick="event.stopPropagation();excluirNota('${n.nf}')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px;padding:2px 6px" onmouseover="this.style.color='var(--accent2)'" onmouseout="this.style.color='var(--muted)'">🗑</button></td>
     </tr>`).join('');
   // Linha de totais
   const totalVolTab=filtrados.reduce((s,n)=>s+n.volumes,0);
   const totalPesoTab=filtrados.reduce((s,n)=>s+(n.pesoBruto||0),0);
   document.getElementById('tbody').innerHTML+=`<tr id="totalRow" style="border-top:2px solid var(--accent);background:#161714">
-    <td></td>
     <td></td>
     <td colspan="3" class="mono" style="font-size:11px;color:var(--muted);padding:8px 14px;letter-spacing:.06em;text-transform:uppercase">TOTAL SELECIONADO</td>
     <td></td>
@@ -5474,6 +5521,81 @@ function excluirNota(nf){
   ['btnPrint','btnPrintEnvio','btnPrintGarantia','btnPrintVenda'].forEach(id=>{ const b=document.getElementById(id); if(b) b.remove(); });
 
   showMsg('✓ Nota ' + fmtNF(nf) + ' excluída.', 'ok');
+}
+
+// ── NOTA MANUAL ──────────────────────────────────────────────
+function nmAddProduto(cod,desc,qtde){
+  const wrap=document.getElementById('nmProdutos');
+  const d=document.createElement('div');
+  d.className='nm-prod';
+  d.innerHTML='<input class="nm-cod" placeholder="Cód." value="'+(cod||'')+'"><input class="nm-desc" placeholder="Descrição do produto" value="'+(desc||'')+'"><input class="nm-qtd" type="number" min="1" value="'+(qtde||1)+'" title="Quantidade"><button type="button" title="Remover" onclick="this.parentNode.remove()">✕</button>';
+  wrap.appendChild(d);
+}
+function abrirNotaManual(){
+  ['nmNF','nmDest','nmEnd','nmBairro','nmMun','nmUF','nmCEP','nmTransp','nmPeso','nmPedido','nmNat','nmDoc'].forEach(id=>{document.getElementById(id).value='';});
+  document.getElementById('nmVol').value='1';
+  document.getElementById('nmProdutos').innerHTML='';
+  nmAddProduto();
+  document.getElementById('nmErro').style.display='none';
+  document.getElementById('notaManualModal').style.display='flex';
+  setTimeout(()=>document.getElementById('nmNF').focus(),50);
+}
+function fecharNotaManual(){
+  document.getElementById('notaManualModal').style.display='none';
+}
+function salvarNotaManual(continuar){
+  const v=id=>document.getElementById(id).value.trim();
+  const erro=msg=>{const e=document.getElementById('nmErro');e.textContent='⚠ '+msg;e.style.display='block';};
+  const nf=v('nmNF').replace(/\D/g,'');
+  const dest=v('nmDest');
+  if(!nf) return erro('Informe o número da nota.');
+  if(!dest) return erro('Informe o destinatário.');
+  if(notas.find(n=>n.nf===nf)) return erro('A nota '+fmtNF(nf)+' já está na lista.');
+
+  const produtos=[...document.querySelectorAll('#nmProdutos .nm-prod')].map(r=>({
+    cod:  r.querySelector('.nm-cod').value.trim(),
+    desc: r.querySelector('.nm-desc').value.trim(),
+    qtde: Math.max(1,parseInt(r.querySelector('.nm-qtd').value)||1),
+    total: 0
+  })).filter(p=>p.cod||p.desc);
+
+  const hoje=new Date();
+  const emissao=String(hoje.getDate()).padStart(2,'0')+'/'+String(hoje.getMonth()+1).padStart(2,'0')+'/'+hoje.getFullYear();
+
+  const nota=criarNotaDeObjeto({
+    nf, serie:'', destinatario:dest,
+    volumes: Math.max(1,parseInt(v('nmVol'))||1),
+    pesoBruto: parseFloat(v('nmPeso').replace(',','.'))||0,
+    produtos,
+    endereco:v('nmEnd'), bairro:v('nmBairro'), municipio:v('nmMun'),
+    estado:v('nmUF').toUpperCase(), cep:v('nmCEP').replace(/\D/g,''),
+    pedido:v('nmPedido'), transportadora:v('nmTransp'),
+    natureza:v('nmNat'), emissao, doc:v('nmDoc'),
+    _tipoOrigem:'manual'
+  });
+  notas.push(nota);
+
+  document.getElementById('statsBar').style.display='grid';
+  document.getElementById('controls').style.display='flex';
+  document.getElementById('tableWrap').style.display='block';
+  document.getElementById('statNotas').textContent=notas.length;
+  document.getElementById('statEtiq').textContent=notas.reduce((a,n)=>a+(n.volumes||0),0);
+  const pesoTot=notas.reduce((a,n)=>a+(n.pesoBruto||0),0);
+  document.getElementById('statPeso').textContent=pesoTot>0?pesoTot.toFixed(2).replace('.',',')+' kg':'—';
+  inicializarTranspAtivas();
+  renderTabela();
+
+  if(continuar){
+    ['nmNF','nmDest','nmEnd','nmBairro','nmMun','nmUF','nmCEP','nmPeso','nmPedido','nmDoc'].forEach(id=>{document.getElementById(id).value='';});
+    document.getElementById('nmVol').value='1';
+    document.getElementById('nmProdutos').innerHTML='';
+    nmAddProduto();
+    document.getElementById('nmErro').style.display='none';
+    document.getElementById('nmNF').focus();
+  } else {
+    fecharNotaManual();
+  }
+  showMsg('✓ Nota '+fmtNF(nf)+' adicionada manualmente.','ok');
 }
 
 // ── GERAR DANFE COMPLETO PARA NOTAS DE XML (sem PDF de origem) ──────────────
