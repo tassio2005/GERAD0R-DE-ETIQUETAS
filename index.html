@@ -796,6 +796,7 @@ tr.dragging{opacity:.35}
     <thead><tr>
       <th class="check-col"></th>
       <th>Nº NOTA</th><th>DESTINATÁRIO</th><th>NATUREZA</th><th>TRANSPORTADORA</th><th>PRODUTOS</th><th>VOL.</th><th>PESO</th><th class="check-col" title="Marcar todas / desmarcar todas como PEÇA"><input type="checkbox" id="checkAllPeca" onclick="toggleAllPeca()" title="Marcar/desmarcar todas como PEÇA"><br><span style="font-size:9px">PEÇA</span></th>
+      <th class="check-col" title="Excluir nota"></th>
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
@@ -3731,6 +3732,7 @@ function renderTabela(){
       </td>
       <td class="mono" style="color:var(--muted);text-align:center;font-size:12px">${n.pesoBruto>0?n.pesoBruto.toFixed(2).replace('.',',')+' kg':'—'}</td>
       <td class="check-col"><input type="checkbox" class="row-check-peca" data-nf="${n.nf}" ${n._peca?'checked':''} title="Marcar para ir na coluna PEÇA do romaneio" onclick="event.stopPropagation()"></td>
+      <td class="check-col"><button class="row-del-btn" title="Excluir esta nota" onclick="event.stopPropagation();excluirNota('${n.nf}')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px;padding:2px 6px" onmouseover="this.style.color='var(--accent2)'" onmouseout="this.style.color='var(--muted)'">🗑</button></td>
     </tr>`).join('');
   // Linha de totais
   const totalVolTab=filtrados.reduce((s,n)=>s+n.volumes,0);
@@ -3741,6 +3743,7 @@ function renderTabela(){
     <td></td>
     <td class="mono" style="text-align:center;padding:8px 14px"><span style="color:var(--accent);font-weight:700">${totalVolTab} vol.</span> <span style="color:var(--muted);font-size:10px">(${filtrados.length} nota${filtrados.length!==1?'s':''} sel.)</span></td>
     <td class="mono" style="text-align:center;padding:8px 14px">${totalPesoTab>0?`<span style="color:var(--accent);font-weight:700">${totalPesoTab.toFixed(2).replace('.',',')} kg</span>`:'<span style="color:var(--muted)">—</span>'}</td>
+    <td></td>
     <td></td>
   </tr>`;
   
@@ -5451,6 +5454,26 @@ function excluirSelecionadas(){
   const bv=document.getElementById('btnPrintVenda');if(bv)bv.remove();
   
   showMsg(`✓ ${qtd} nota${qtd>1?'s':''} fiscal${qtd>1?'is':''} excluída${qtd>1?'s':''} com sucesso.`, 'ok');
+}
+
+function excluirNota(nf){
+  const nota = notas.find(n => n.nf === nf);
+  if(!nota) return;
+  if(!confirm('Excluir a nota ' + fmtNF(nf) + (nota.destinatario ? ' (' + nota.destinatario + ')' : '') + '?')) return;
+
+  notas = notas.filter(n => n.nf !== nf);
+  notasSelecionadas.delete(nf);
+  renderTabela();
+
+  // Limpa as prévias (mesmo comportamento de "Excluir Selecionadas")
+  ['grid','gridEnvio','gridGarantia','gridVenda'].forEach(id=>{ const el=document.getElementById(id); if(el) el.innerHTML=''; });
+  ['preview','previewEnvio','previewGarantia','previewVenda'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.style.display='none';
+  });
+  ['btnPrint','btnPrintEnvio','btnPrintGarantia','btnPrintVenda'].forEach(id=>{ const b=document.getElementById(id); if(b) b.remove(); });
+
+  showMsg('✓ Nota ' + fmtNF(nf) + ' excluída.', 'ok');
 }
 
 // ── GERAR DANFE COMPLETO PARA NOTAS DE XML (sem PDF de origem) ──────────────
