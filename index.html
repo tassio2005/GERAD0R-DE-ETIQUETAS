@@ -795,8 +795,8 @@ tr.dragging{opacity:.35}
   <table>
     <thead><tr>
       <th class="check-col"></th>
-      <th>Nº NOTA</th><th>DESTINATÁRIO</th><th>NATUREZA</th><th>TRANSPORTADORA</th><th>PRODUTOS</th><th>VOL.</th><th>PESO</th><th class="check-col" title="Marcar todas / desmarcar todas como PEÇA"><input type="checkbox" id="checkAllPeca" onclick="toggleAllPeca()" title="Marcar/desmarcar todas como PEÇA"><br><span style="font-size:9px">PEÇA</span></th>
       <th class="check-col" title="Excluir nota"></th>
+      <th>Nº NOTA</th><th>DESTINATÁRIO</th><th>NATUREZA</th><th>TRANSPORTADORA</th><th>PRODUTOS</th><th>VOL.</th><th>PESO</th><th class="check-col" title="Marcar todas / desmarcar todas como PEÇA"><input type="checkbox" id="checkAllPeca" onclick="toggleAllPeca()" title="Marcar/desmarcar todas como PEÇA"><br><span style="font-size:9px">PEÇA</span></th>
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
@@ -3718,6 +3718,7 @@ function renderTabela(){
   document.getElementById('tbody').innerHTML=filtrados.map(n=>`
     <tr class="row-clickable" data-nf="${n.nf}" onclick="handleRowClick(event, '${n.nf}')">
       <td class="check-col"><input type="checkbox" class="row-check" data-nf="${n.nf}" ${notasSelecionadas.has(n.nf) || n._selecionado?'checked':''}></td>
+      <td class="check-col"><button class="row-del-btn" title="Excluir esta nota" onclick="event.stopPropagation();excluirNota('${n.nf}')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px;padding:2px 6px" onmouseover="this.style.color='var(--accent2)'" onmouseout="this.style.color='var(--muted)'">🗑</button></td>
       <td class="mono" style="color:var(--accent);font-weight:700">${fmtNF(n.nf)}${badgeImpressaoHTML(n.nf)}</td>
       <td style="font-weight:500">${n.destinatario}</td>
       <td style="font-size:11px;color:var(--muted)">${n.natureza ? '<span style="background:rgba(212,245,60,.08);color:var(--accent);padding:2px 6px;border-radius:2px;border:1px solid rgba(212,245,60,.2)">' + (n.natureza.length > 35 ? n.natureza.substring(0, 35) + '…' : n.natureza) + '</span>' : '<span style="color:var(--border)">—</span>'}</td>
@@ -3732,18 +3733,17 @@ function renderTabela(){
       </td>
       <td class="mono" style="color:var(--muted);text-align:center;font-size:12px">${n.pesoBruto>0?n.pesoBruto.toFixed(2).replace('.',',')+' kg':'—'}</td>
       <td class="check-col"><input type="checkbox" class="row-check-peca" data-nf="${n.nf}" ${n._peca?'checked':''} title="Marcar para ir na coluna PEÇA do romaneio" onclick="event.stopPropagation()"></td>
-      <td class="check-col"><button class="row-del-btn" title="Excluir esta nota" onclick="event.stopPropagation();excluirNota('${n.nf}')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px;padding:2px 6px" onmouseover="this.style.color='var(--accent2)'" onmouseout="this.style.color='var(--muted)'">🗑</button></td>
     </tr>`).join('');
   // Linha de totais
   const totalVolTab=filtrados.reduce((s,n)=>s+n.volumes,0);
   const totalPesoTab=filtrados.reduce((s,n)=>s+(n.pesoBruto||0),0);
   document.getElementById('tbody').innerHTML+=`<tr id="totalRow" style="border-top:2px solid var(--accent);background:#161714">
     <td></td>
+    <td></td>
     <td colspan="3" class="mono" style="font-size:11px;color:var(--muted);padding:8px 14px;letter-spacing:.06em;text-transform:uppercase">TOTAL SELECIONADO</td>
     <td></td>
     <td class="mono" style="text-align:center;padding:8px 14px"><span style="color:var(--accent);font-weight:700">${totalVolTab} vol.</span> <span style="color:var(--muted);font-size:10px">(${filtrados.length} nota${filtrados.length!==1?'s':''} sel.)</span></td>
     <td class="mono" style="text-align:center;padding:8px 14px">${totalPesoTab>0?`<span style="color:var(--accent);font-weight:700">${totalPesoTab.toFixed(2).replace('.',',')} kg</span>`:'<span style="color:var(--muted)">—</span>'}</td>
-    <td></td>
     <td></td>
   </tr>`;
   
