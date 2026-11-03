@@ -66,7 +66,7 @@
   .btn-ghost{background:transparent;border-color:transparent;color:var(--muted)}
   .btn-ghost:hover{border-color:var(--border);color:var(--text)}
 
-  .table-wrap{background:var(--panel);border:1px solid var(--border);overflow:auto;margin-bottom:28px}
+  .table-wrap{background:var(--panel);border:1px solid var(--border);overflow:auto;margin-bottom:}
   table{width:100%;border-collapse:collapse;font-size:13px}
   thead th{background:#161714;padding:10px 14px;text-align:left;font-family:'Space Mono',monospace;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap}
   tbody tr{border-bottom:1px solid var(--border)}
@@ -4497,7 +4497,7 @@ function etiquetaVendaHTML(n, volAtual, volTotal) {
     
     // Se houver 7+ produtos E resumo, exibir resumo em destaque
     if (n.produtos.length >= 7 && resumo) {
-      prodsHTML = `<div style="font-size:28px;font-weight:900;letter-spacing:1px;line-height:1.1;margin-top:2px">${resumo}</div>`;
+      prodsHTML = `<div style="font-size:15px;font-weight:900;letter-spacing:1px;line-height:1.1;margin-top:2px">${resumo}</div>`;
     } else {
       // Exibir lista de produtos com fonte reduzida se necessário
       prodsHTML = n.produtos.map(p => {
@@ -4720,7 +4720,7 @@ function etiquetaGarantiaHTML(n,volAtual,volTotal){
       fonteSizeProds = novaFonte + 'px';
     }
     if (n.produtos.length >= 7 && resumo) {
-      prodsHTML = `<div style="font-size:28px;font-weight:900;letter-spacing:1px;line-height:1.1;margin-top:2px">${resumo}</div>`;
+      prodsHTML = `<div style="font-size:15px;font-weight:900;letter-spacing:1px;line-height:1.1;margin-top:2px">${resumo}</div>`;
     } else {
       prodsHTML = n.produtos.map(p => `<div class="ev-prod-linha" style="line-height:1.1;margin-bottom:1px">[${p.cod}] ${p.desc}</div>`).join('');
     }
